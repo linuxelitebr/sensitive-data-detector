@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 # Usage: python sensitive-data-detector.py <directory>
-# Image OCR requisites: pillow pytesseract
-"""
-Script to detect sensitive data in files and images (using OCR)
-"""
+
 import os
 import re
 import sys
 from pathlib import Path
 
-# Try to import OCR libraries
 try:
     from PIL import Image
     import pytesseract
@@ -17,7 +13,6 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
-# Sensitive data patterns
 PATTERNS = {
     'AWS Access Key': r'AKIA[0-9A-Z]{16}',
     'AWS Secret Key': r'aws[_\-]?secret[_\-]?access[_\-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}',
@@ -34,23 +29,20 @@ PATTERNS = {
     'Base64 Credentials': r'(?:username|password|user|pass|passwd|pwd)["\']?\s*[:=]\s*["\']?[A-Za-z0-9+/]{8,}={0,2}',
     'iDRAC/BMC Address': r'(?:idrac|redfish|ipmi|ilo|bmc)(?:-virtualmedia)?://[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}[^\s]*',
     'Private IP Address': r'(?:10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3})',
+    'Email Address': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+    'Internal System URL': r'https?://(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[\w-]+\.(?:local|internal|corp|lan))(?::\d+)?[^\s]*',
 }
 
-# Extensions to ignore for text scanning
 IGNORE_EXTENSIONS = {'.exe', '.bin', '.so', '.dll', '.pyc', '.class', '.zip', '.tar', '.gz', 
                      '.pdf', '.doc', '.docx', '.xls', '.xlsx'}
 
-# Image extensions to scan with OCR
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
 
-# SVG is text-based, so we can read it directly
 SVG_EXTENSION = '.svg'
 
-# Directories to ignore
 IGNORE_DIRS = {'.git', 'node_modules', 'venv', '.venv', '__pycache__', 'dist', 'build'}
 
 def should_scan_file(file_path):
-    """Check if file should be scanned"""
     ext = file_path.suffix.lower()
     
     if ext in IGNORE_EXTENSIONS:
@@ -62,7 +54,6 @@ def should_scan_file(file_path):
     if ext == SVG_EXTENSION:
         return True, 'svg'
     
-    # Ignore very large files (>10MB) for text files
     try:
         if file_path.stat().st_size > 10 * 1024 * 1024:
             return False, None
@@ -72,7 +63,6 @@ def should_scan_file(file_path):
     return True, 'text'
 
 def extract_text_from_image(file_path):
-    """Extract text from image using OCR"""
     if not OCR_AVAILABLE:
         return None
     
@@ -84,7 +74,6 @@ def extract_text_from_image(file_path):
         return None
 
 def scan_content(content, file_path, file_type='text'):
-    """Scan content for sensitive data"""
     findings = []
     
     if not content:
@@ -94,7 +83,6 @@ def scan_content(content, file_path, file_type='text'):
         matches = re.finditer(pattern, content, re.IGNORECASE)
         for match in matches:
             if file_type == 'image':
-                # For images, we don't have line numbers
                 findings.append({
                     'type': secret_type,
                     'file': str(file_path),
@@ -102,14 +90,10 @@ def scan_content(content, file_path, file_type='text'):
                     'content': match.group()[:100]
                 })
             else:
-                # Find line number for text files
                 line_num = content[:match.start()].count('\n') + 1
-                
-                # Extract complete line
                 lines = content.split('\n')
                 if line_num <= len(lines):
                     line_content = lines[line_num - 1].strip()
-                    
                     findings.append({
                         'type': secret_type,
                         'file': str(file_path),
@@ -120,52 +104,137 @@ def scan_content(content, file_path, file_type='text'):
     return findings
 
 def scan_file(file_path, file_type):
-    """Scan a file for sensitive data"""
     findings = []
     
     try:
         if file_type == 'image':
-            # Extract text from image using OCR
             content = extract_text_from_image(file_path)
             if content:
                 findings = scan_content(content, file_path, 'image')
-        
         elif file_type in ['text', 'svg']:
-            # Read text files and SVG directly
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             findings = scan_content(content, file_path, file_type)
-    
     except Exception as e:
-        pass  # Ignore read errors
+        pass
     
     return findings
 
 def scan_directory(directory):
-    """Scan directory recursively"""
     all_findings = []
     scanned_files = 0
     skipped_images = 0
+    total_files = 0
     
     for root, dirs, files in os.walk(directory):
-        # Remove ignored directories from search
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for file in files:
+            file_path = Path(root) / file
+            should_scan, file_type = should_scan_file(file_path)
+            if should_scan:
+                if file_type == 'image' and not OCR_AVAILABLE:
+                    skipped_images += 1
+                else:
+                    total_files += 1
+    
+    print(f"Found {total_files} files to scan...\n")
+    
+    for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
         
         for file in files:
             file_path = Path(root) / file
-            
             should_scan, file_type = should_scan_file(file_path)
             
             if should_scan:
                 if file_type == 'image' and not OCR_AVAILABLE:
-                    skipped_images += 1
                     continue
                 
                 scanned_files += 1
+                print(f"[{scanned_files}/{total_files}] Scanning: {file_path.name}", end='')
+                
+                if file_type == 'image':
+                    print(" (OCR)", end='')
+                elif file_type == 'svg':
+                    print(" (SVG)", end='')
+                
                 findings = scan_file(file_path, file_type)
+                
+                if findings:
+                    print(f" - FOUND {len(findings)} alert(s)")
+                else:
+                    print()
+                
                 all_findings.extend(findings)
     
     return all_findings, scanned_files, skipped_images
+
+def generate_summary(findings):
+    if not findings:
+        return None
+    
+    critical_types = {
+        'AWS Access Key', 'AWS Secret Key', 'GitHub Token', 'Generic API Key',
+        'Bearer Token', 'JWT Token', 'Password Field', 'Private Key',
+        'Docker Pull Secret', 'Generic Secret', 'Token Generic', 'Base64 Credentials'
+    }
+    
+    infrastructure_types = {
+        'Email Address', 'Private IP Address', 'iDRAC/BMC Address',
+        'Internal System URL', 'Username Field'
+    }
+    
+    critical_findings = []
+    infrastructure_findings = []
+    
+    for finding in findings:
+        finding_type = finding['type']
+        if finding_type in critical_types:
+            if finding_type not in critical_findings:
+                critical_findings.append(finding_type)
+        elif finding_type in infrastructure_types:
+            if finding_type not in infrastructure_findings:
+                infrastructure_findings.append(finding_type)
+    
+    summary_parts = []
+    
+    if critical_findings:
+        credential_types = []
+        if any(t in critical_findings for t in ['Password Field', 'Base64 Credentials']):
+            credential_types.append('passwords')
+        if any(t in critical_findings for t in ['AWS Access Key', 'AWS Secret Key', 'GitHub Token', 
+                                                  'Generic API Key', 'Bearer Token', 'JWT Token', 'Token Generic']):
+            credential_types.append('tokens')
+        if any(t in critical_findings for t in ['Generic Secret', 'Docker Pull Secret', 'Private Key']):
+            credential_types.append('secrets')
+        
+        summary_parts.append(
+            f"CRITICAL: This repository contains sensitive customer data, such as {', '.join(credential_types)}."
+        )
+    
+    if infrastructure_findings:
+        infra_types = []
+        if 'Email Address' in infrastructure_findings:
+            infra_types.append('email addresses')
+        if any(t in infrastructure_findings for t in ['Private IP Address', 'iDRAC/BMC Address', 'Internal System URL']):
+            infra_types.append('sensitive infrastructure information (IPs, hostnames, internal URLs)')
+        if 'Username Field' in infrastructure_findings:
+            infra_types.append('usernames')
+        
+        if critical_findings:
+            summary_parts.append(f"It also contains {', '.join(infra_types)}.")
+        else:
+            summary_parts.append(
+                f"This repository does not contain customer data such as passwords, tokens, and secrets. "
+                f"However, it does contain {', '.join(infra_types)}."
+            )
+    
+    if not critical_findings and not infrastructure_findings:
+        summary_parts.append(
+            "This repository does not contain obvious sensitive customer data such as passwords, tokens, or secrets."
+        )
+    
+    return ' '.join(summary_parts)
 
 def main():
     if len(sys.argv) < 2:
@@ -178,14 +247,17 @@ def main():
         print(f"Error: '{directory}' is not a valid directory")
         sys.exit(1)
     
-    if not OCR_AVAILABLE:
-        print("WARNING: OCR libraries not installed. Image scanning disabled.")
-        print("To enable image scanning, install: pip install pillow pytesseract")
-        print("Also install tesseract-ocr on your system.\n")
+    print(f"Scanning: {directory}")
+    print(f"OCR Status: {'Enabled (images will be scanned)' if OCR_AVAILABLE else 'Disabled (images will be skipped)'}")
     
-    print(f"Scanning: {directory}\n")
+    if not OCR_AVAILABLE:
+        print("To enable OCR: pip install pillow pytesseract")
+    
+    print()
     
     findings, scanned_files, skipped_images = scan_directory(directory)
+    
+    print()
     
     if findings:
         print(f"WARNING: FOUND {len(findings)} POTENTIAL SENSITIVE DATA:\n")
@@ -204,6 +276,14 @@ def main():
     if skipped_images > 0:
         print(f"   Images skipped (OCR not available): {skipped_images}")
     print(f"   Alerts found: {len(findings)}")
+    
+    summary = generate_summary(findings)
+    if summary:
+        print(f"\n{'=' * 80}")
+        print("SUMMARY:")
+        print('=' * 80)
+        print(summary)
+        print('=' * 80)
 
 if __name__ == '__main__':
     main()
