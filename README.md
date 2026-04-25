@@ -1,194 +1,167 @@
-# Sensitive Data Detector
+# sensitive-data-detector
 
-Script to scan directories for sensitive data like tokens, passwords, secrets and others.
+Static analysis tool to detect leaked credentials, tokens, and OpenShift
+pull-secrets in source trees. Designed for GitOps pipelines and pre-flight
+audits in regulated environments.
+
+- **Output**: human-readable text or JSON (`--json`).
+- **Exit codes**: `0` clean, `1` critical finding, `2` invalid input.
+  Suitable for blocking commits, MR/PRs, and ArgoCD/Tekton sync.
+- **Redaction by default**: secrets in stdout/CI logs come masked.
+- **Allowlist**: regex-based, file-driven (one regex per line).
+- **OpenShift / Kubernetes**: detects `kubernetes.io/dockerconfigjson`
+  Secrets and decodes the `.dockerconfigjson` field to flag every
+  `auths.<registry>.auth` entry.
+- **OCR optional**: scans images (JPG, PNG, BMP, TIFF) when `pillow` and
+  `pytesseract` are installed; per-image timeout and decompression-bomb
+  guard built in.
+
+## Install
+
+The detector itself has no required dependencies. OCR is optional:
+
+```bash
+pip install pillow pytesseract
+# plus tesseract-ocr on the host
+#   macOS:        brew install tesseract
+#   Debian/Ubuntu: sudo apt-get install tesseract-ocr
+```
 
 ## Usage
 
 ```bash
-python sensitive-data-detector.py <directory>
+python3 sensitive-data-detector.py <directory> [options]
 ```
+
+Common options:
+
+| flag | purpose |
+| --- | --- |
+| `--json` | emit a JSON report on stdout (for CI consumption) |
+| `--quiet` | suppress per-file progress on stderr |
+| `--allowlist FILE` | regex-per-line file; matching findings are dropped |
+| `--fail-on-info` | exit 1 also for IPs, internal URLs and emails |
+| `--max-bytes N` | skip files larger than N bytes (default 10MB) |
+| `--ocr-timeout N` | per-image OCR timeout in seconds (default 30) |
+| `--ignore-dir NAME` | extra directory name to skip (repeatable) |
+
+Exit codes:
+
+| code | meaning |
+| ---  | --- |
+| `0`  | nothing critical (or only info findings, without `--fail-on-info`) |
+| `1`  | critical finding (or info finding with `--fail-on-info`) |
+| `2`  | invalid arguments / not a directory |
 
 ## What it detects
 
-- AWS Access Keys and Secret Keys
-- GitHub Tokens
-- JWT Tokens
-- API Keys
-- Bearer Tokens
-- **Passwords and Usernames** (plaintext and base64 encoded)
-- Private SSH/RSA Keys
-- Docker Pull Secrets
-- Generic secrets and tokens
-- **Management Interface URLs** (iDRAC, iLO, IPMI, BMC)
-- **Private IP Addresses**
-- **Email Addresses**
-- **Internal System URLs** (localhost, .local, .internal, .corp, .lan domains)
-- Sensitive data in **images** (JPG, PNG, BMP, TIFF) using OCR
-- Sensitive data in **SVG files**
+**Credentials and tokens (critical):**
 
-## Features
+- AWS access keys (`AKIA...`) and secret keys
+- GitHub tokens (`ghp_/ghs_/gho_/ghu_/ghr_`)
+- GitLab personal access tokens (`glpat-`)
+- Slack tokens (`xoxb-/xoxp-/xoxa-/xoxr-/xoxs-`)
+- Google API keys (`AIza...`)
+- Red Hat / Quay robot tokens
+- JWTs (3-segment, non-empty)
+- `Bearer ...` headers (length-bounded)
+- Generic `api_key=`, `token=`, `secret=`, `password=` quoted assignments
+- PEM private keys (RSA, OPENSSH, EC, DSA, ENCRYPTED, PGP)
 
-- Recursive directory scanning
-- **Real-time feedback** - shows progress and identifies when scanning images with OCR
-- **Automatic summary report** - categorizes findings by severity (critical vs infrastructure)
-- Ignores binary files and common build directories
-- Shows file path, line number, and content preview
-- Skips large files (>10MB)
-- **OCR support for images** - detects sensitive data in screenshots and images
-- **SVG text extraction** - scans vector images containing text
+**OpenShift / Kubernetes pull-secrets (critical):**
+
+- Raw `~/.docker/config.json` / `pull-secret.json` with `auths.*.auth`
+- `Secret` manifests with `type: kubernetes.io/dockerconfigjson`
+- Base64-encoded `.dockerconfigjson` field — the detector decodes it and
+  reports every embedded registry auth entry separately
+
+**Infrastructure exposure (info, non-blocking by default):**
+
+- Private IPv4 ranges (RFC 1918)
+- Internal/management URLs (`*.local`, `*.internal`, `*.corp`, `*.lan`,
+  `localhost`, `127.0.0.1`)
+- iDRAC / iLO / IPMI / Redfish / BMC URLs
+- Email addresses
 
 ## Example
 
 ```bash
-python sensitive-data-detector.py /path/to/your/project
-```
+$ python3 sensitive-data-detector.py tests/fixtures/openshift --quiet
 
-Output:
-```
-Scanning: /path/to/your/project
-OCR Status: Enabled (images will be scanned)
+FOUND 6 potential leak(s) (6 critical, 0 info):
 
-Found 45 files to scan...
-
-[1/45] Scanning: config.py
-[2/45] Scanning: setup.sh - FOUND 1 alert(s)
-[3/45] Scanning: screenshot.png (OCR) - FOUND 2 alert(s)
-[4/45] Scanning: logo.svg (SVG)
-[5/45] Scanning: deployment.yaml - FOUND 1 alert(s)
+[CRITICAL] OpenShift Pull-Secret (decoded)
+  file:    tests/fixtures/openshift/pull-secret.json
+  line:    1
+  preview: registry=registry.redhat.io auth=********pass
+--------------------------------------------------------------------------------
+[CRITICAL] Kubernetes dockerconfigjson Secret
+  file:    tests/fixtures/openshift/secret.yaml
+  line:    5
+  preview: type: kubernetes.io/dockerconfigjson
+--------------------------------------------------------------------------------
 ...
 
-WARNING: FOUND 3 POTENTIAL SENSITIVE DATA:
-
-Type: AWS Access Key
-File: /path/to/your/project/config.py
-Line: 15
-Content: aws_access_key = "AKIAIOSFODNN7EXAMPLE"
---------------------------------------------------------------------------------
-Type: Base64 Credentials
-File: /path/to/your/project/setup.sh
-Line: 42
-Content: username: dXNlcjEyMzQ=
---------------------------------------------------------------------------------
-Type: iDRAC/BMC Address
-File: /path/to/your/project/screenshot.png
-Line: N/A (OCR)
-Content: address: idrac-virtualmedia://10.0.0.100/redfish/v1/Systems/System.Embedded.1
---------------------------------------------------------------------------------
-
 Statistics:
-   Files scanned: 45
-   Alerts found: 3
-
-================================================================================
-SUMMARY:
-================================================================================
-CRITICAL: This repository contains sensitive customer data, such as passwords, 
-tokens, secrets. It also contains email addresses, sensitive infrastructure 
-information (IPs, hostnames, internal URLs).
-================================================================================
+  files scanned:  2
+  critical:       6
+  info:           0
+$ echo $?
+1
 ```
 
-## Requirements
+## Pipeline integration
 
-- Python 3.6+
-- No external dependencies for basic text scanning
+Ready-to-copy snippets live under [`examples/`](examples/):
 
-### Optional (for image scanning):
+| file | use case |
+| --- | --- |
+| [`pre-commit-hook.sh`](examples/pre-commit-hook.sh) | local Git hook, scans only staged files |
+| [`.pre-commit-hooks.yaml`](examples/.pre-commit-hooks.yaml) | [pre-commit](https://pre-commit.com) framework |
+| [`github-actions.yml`](examples/github-actions.yml) | GitHub Actions PR/push gate, JSON artifact upload |
+| [`gitlab-ci.yml`](examples/gitlab-ci.yml) | GitLab CI security stage |
+| [`argocd-presync-hook.yaml`](examples/argocd-presync-hook.yaml) | ArgoCD `PreSync` Job — blocks the sync if leaks are found |
+| [`tekton-task.yaml`](examples/tekton-task.yaml) | Tekton Task to chain after `git-clone` |
+| [`.sdd-allowlist.example`](examples/.sdd-allowlist.example) | sample allowlist |
+
+The pre-commit hook ships staged blobs to a temp directory and runs the
+detector against that — it reflects what is *about to be committed*, not the
+working tree.
+
+## Allowlist
+
+Plain text, one regex per line. Comments start with `#`. Whatever the regex
+matches *inside the detected match* drops the finding:
+
+```text
+# fixtures-only:
+AKIAIOSFODNN7EXAMPLE
+# example doc emails:
+docs@example\.com
+```
+
+Pass with `--allowlist .sdd-allowlist`.
+
+## Tests
+
 ```bash
-pip install pillow pytesseract
+pip install pytest
+python3 -m pytest tests/ -v
 ```
 
-Also install tesseract-ocr on your system:
-- **Ubuntu/Debian**: `sudo apt-get install tesseract-ocr`
-- **macOS**: `brew install tesseract`
-- **Windows**: Download from [GitHub](https://github.com/UB-Mannheim/tesseract/wiki)
+The suite covers each pattern with positive and negative cases, redaction,
+allowlist behaviour, exit codes, JSON output, OpenShift pull-secret
+decoding, file-size limits, ignored dirs, and symlink safety.
 
-The script will work without these dependencies but will skip image files.
+## Limitations
 
-## Detection Examples
+- Regex-based scanner — false positives are possible. Review findings.
+- The `--quiet` text output is for humans. For machines, use `--json`.
+- OCR requires `tesseract` and runs with a per-image timeout; quality
+  depends on image clarity.
+- The detector reads files only — it never connects to remote services and
+  never modifies content.
 
-The script can detect various formats of sensitive data:
+## License
 
-**Plaintext credentials:**
-```
-username: john_doe
-password: MyP@ssw0rd2024
-```
-
-**Base64 encoded credentials:**
-```
-username: dXNlcjEyMzQ=
-password: cGFzc3dvcmQxMjM0NQ==
-```
-
-**Management interfaces:**
-```
-address: idrac-virtualmedia://10.0.0.100/redfish/v1/Systems/System.Embedded.1
-```
-
-**API tokens and keys:**
-```
-api_key: eHqLyjDrjtT1zdp7dc
-bearer_token: Bearer eyJhbcOIzNiIsInR5cCI6IkpXVCJ9...
-```
-
-**Email addresses:**
-```
-user@example.com
-support@test-system.local
-```
-
-**Internal system URLs:**
-```
-https://gitlab.internal:8080/project/repo
-http://jenkins.corp/job/deploy
-https://192.168.0.50:3000/admin
-http://localhost:8080/api/secrets
-```
-
-**In images (with OCR enabled):** The script can detect all the above patterns even when they appear in screenshots or photos.
-
-## Customization
-
-You can easily add custom detection patterns by editing the `PATTERNS` dictionary in the script:
-
-```python
-PATTERNS = {
-    'Your Custom Pattern': r'your_regex_pattern_here',
-    # ... other patterns
-}
-```
-
-## Summary Reports
-
-At the end of each scan, the script provides a categorized summary:
-
-**No sensitive data found:**
-```
-This repository does not contain obvious sensitive customer data such as 
-passwords, tokens, or secrets.
-```
-
-**Infrastructure data only:**
-```
-This repository does not contain customer data such as passwords, tokens, 
-and secrets. However, it does contain email addresses, sensitive infrastructure 
-information (IPs, hostnames, internal URLs).
-```
-
-**Critical data found:**
-```
-CRITICAL: This repository contains sensitive customer data, such as passwords, 
-tokens, secrets. It also contains email addresses, sensitive infrastructure 
-information (IPs, hostnames, internal URLs).
-```
-
-## Important Notes
-
-- The script may produce false positives - review all findings manually
-- OCR accuracy depends on image quality and text clarity
-- Base64 detection may match non-credential data (review context)
-- Private IPs are flagged but may be legitimate internal addresses
-- **Email addresses** may include legitimate contact info in documentation
-- **Internal URLs** detection helps identify exposed internal infrastructure references
-- Always verify findings before taking action
+MIT. See [LICENSE](LICENSE).

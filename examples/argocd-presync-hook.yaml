@@ -1,0 +1,35 @@
+# PreSync hook do ArgoCD: roda o detector contra o repo Git que o Application
+# aponta, antes de aplicar manifests no cluster. Se achar credencial critica
+# (ou pull-secret commitado), o sync falha e o estado nao avanca.
+#
+# Uso: aplica esse Job no namespace do Application com a annotation argocd.
+# argoproj.io/hook: PreSync. ArgoCD cria, espera completar, e segue ou aborta.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: sdd-presync-
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scan
+          image: python:3.11-slim
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git >/dev/null
+              git clone --depth=1 "$REPO_URL" /src
+              python3 /src/sensitive-data-detector.py /src --quiet --json > /tmp/sdd.json
+              rc=$?
+              cat /tmp/sdd.json
+              exit $rc
+          env:
+            - name: REPO_URL
+              value: https://gitlab.example.com/team/manifests.git

@@ -1,0 +1,4 @@
+db_host = 192.168.10.50
+mgmt_url = https://gitlab.internal:8443/team/repo
+idrac = idrac-virtualmedia://10.0.0.100/redfish/v1/Systems/System.Embedded.1
+contact = ops-team@example.local

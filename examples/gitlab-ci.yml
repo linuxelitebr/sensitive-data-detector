@@ -1,0 +1,25 @@
+# .gitlab-ci.yml — stage de seguranca pre-merge
+#
+# Roda o detector e publica o JSON como artefato. Em ambientes regulados,
+# usa --fail-on-info pra bloquear leak de infra interna tambem.
+
+stages:
+  - security
+
+secrets-scan:
+  stage: security
+  image: python:3.11-slim
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - python3 sensitive-data-detector.py . --quiet --json > sdd-report.json
+  artifacts:
+    when: always
+    paths:
+      - sdd-report.json
+    reports:
+      # GitLab le o JSON; integracao customizada vai aqui
+      dotenv: sdd-report.env
+    expire_in: 30 days
+  allow_failure: false

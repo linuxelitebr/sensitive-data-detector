@@ -1,0 +1,44 @@
+# .github/workflows/secrets-scan.yml
+#
+# Pre-flight audit: roda em todo PR antes do merge. Falha o job se achar
+# credencial critica. Para ambientes regulados, ative tambem --fail-on-info
+# pra bloquear vazamento de IP interno e URL .corp/.internal.
+
+name: secrets-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run sensitive-data-detector
+        run: |
+          python3 sensitive-data-detector.py . \
+            --quiet \
+            --json \
+            --allowlist .sdd-allowlist 2>/dev/null \
+            > sdd-report.json || RC=$?
+          echo "exit_code=${RC:-0}" >> "$GITHUB_OUTPUT"
+          cat sdd-report.json | python3 -m json.tool | head -100
+          exit "${RC:-0}"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdd-report
+          path: sdd-report.json
