@@ -1,0 +1,16 @@
+# Allowlist do proprio repo. Suprime findings em fixtures/docs que sao
+# claramente sinteticos.
+
+# Chave de exemplo publica da AWS
+AKIAIOSFODNN7EXAMPLE
+wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+# JWT publico do jwt.io (usado em docs e fixtures)
+SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+
+# Email de exemplo
+example\.com
+example\.local
+
+# Mencoes ao tipo de Secret aparecem em README/docs
+kubernetes\.io/dockerconfigjson

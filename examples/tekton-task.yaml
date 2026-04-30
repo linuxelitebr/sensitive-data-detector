@@ -1,0 +1,38 @@
+# Tekton Task: pre-flight audit antes de aplicar manifests no OpenShift.
+# Encadeia em Pipeline depois do `git-clone` task.
+
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sensitive-data-detector
+spec:
+  description: |
+    Static analysis para credenciais, tokens e OpenShift pull-secrets em
+    arvores de fonte. Falha o pipeline (exit 1) ao achar algo critico.
+  params:
+    - name: source-subdir
+      default: ""
+      description: subpath dentro do workspace pra escanear
+    - name: fail-on-info
+      default: "false"
+      description: tambem falhar em IPs/URLs internos
+  workspaces:
+    - name: source
+      description: workspace contendo o codigo clonado
+  steps:
+    - name: scan
+      image: python:3.11-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env bash
+        set -eo pipefail
+        SCAN_DIR="$(workspaces.source.path)/$(params.source-subdir)"
+        FLAGS="--quiet --json"
+        if [ "$(params.fail-on-info)" = "true" ]; then
+          FLAGS="$FLAGS --fail-on-info"
+        fi
+        python3 $(workspaces.source.path)/sensitive-data-detector.py "$SCAN_DIR" $FLAGS \
+          | tee /tekton/results/report.json
+  results:
+    - name: report
+      description: relatorio JSON do scan

@@ -1,0 +1,16 @@
+# Configuracao para framework pre-commit (https://pre-commit.com/).
+# No repo consumidor, adiciona ao .pre-commit-config.yaml:
+#
+# repos:
+#   - repo: https://github.com/linuxelitebr/sensitive-data-detector
+#     rev: v1.0.0
+#     hooks:
+#       - id: sensitive-data-detector
+
+- id: sensitive-data-detector
+  name: sensitive-data-detector
+  description: Detecta credenciais e OpenShift pull-secrets em arquivos staged
+  entry: python3 sensitive-data-detector.py
+  language: system
+  args: ["--quiet", "."]
+  pass_filenames: false

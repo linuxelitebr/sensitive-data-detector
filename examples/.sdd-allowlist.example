@@ -1,0 +1,14 @@
+# Allowlist do sensitive-data-detector.
+# Uma regex Python por linha. Linha vazia e linha iniciada por # e comentario.
+# Se a regex casar dentro do match, o finding e suprimido.
+#
+# Exemplos:
+
+# AKIA de exemplo da AWS, usado em documentacao:
+AKIAIOSFODNN7EXAMPLE
+
+# JWT de exemplo do jwt.io (apenas em fixtures e docs):
+SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+
+# Email do time de docs:
+docs@example\.com
